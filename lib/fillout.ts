@@ -134,10 +134,19 @@ function normalizeFilloutBaseUrl(value: string): string {
   return cleaned;
 }
 
+function normalizeFilloutApiKey(value: string | undefined): string {
+  const raw = cleanEnvValue(value)
+    .replace(/^\uFEFF/, "")
+    .replace(/^[\u201C\u201D\u2018\u2019"']+|[\u201C\u201D\u2018\u2019"']+$/g, "")
+    .replace(/^Bearer/i, "")
+    .replace(/^FILLOUT_API_KEY=/i, "")
+    .replace(/[\s\u00A0\u200B-\u200D\uFEFF]+/g, "");
+  const match = raw.match(/sk_(?:prod|test)_[A-Za-z0-9_]+/);
+  return match ? match[0] : raw;
+}
+
 function getFilloutConfig() {
-  const apiKey = cleanEnvValue(process.env["FILLOUT_API_KEY"])
-    .replace(/^Bearer\s+/i, "")
-    .trim();
+  const apiKey = normalizeFilloutApiKey(process.env["FILLOUT_API_KEY"]);
   const baseUrl = normalizeFilloutBaseUrl(process.env["FILLOUT_API_URL"] ?? "");
   return { apiKey, baseUrl };
 }
@@ -366,10 +375,10 @@ async function filloutFetch<T>(path: string, fresh = false): Promise<T> {
 
     if (!response.ok) {
       const body = await response.text();
-      const invalidKey = /api key invalid/i.test(body);
-      if (invalidKey) {
+      const badKey = /api key invalid|incorrectly formatted api key/i.test(body);
+      if (badKey) {
         const info = describeFilloutConfig();
-        lastError = `Fillout refuse la clé API utilisée ici (${info.length} caractères, préfixe ${info.prefix || "vide"}). .env.local n'est pas déployé : recolle FILLOUT_API_KEY dans Netlify → Site settings → Environment variables, puis Trigger deploy.`;
+        lastError = `Fillout refuse la clé API (${info.length} caractères, préfixe « ${info.prefix || "vide"} »). Dans Netlify, FILLOUT_API_KEY doit commencer par sk_prod_ uniquement, sans FIL, sans nom de variable, sans URL.`;
       } else if (response.status === 404) {
         lastError = `Fillout API (404) sur ${requestUrl}. L'URL du dashboard (https://api.fillout.com) doit devenir https://api.fillout.com/v1/api.`;
       } else {
