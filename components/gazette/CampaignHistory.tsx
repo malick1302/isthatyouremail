@@ -27,7 +27,8 @@ function formatSentAt(value: string | null): string {
 
 function statusLabel(status: string): string {
   if (status === "sent") return "Envoyée";
-  if (status === "queued" || status === "inProcess" || status === "in_process") return "En cours";
+  if (status === "queued") return "Planifiée";
+  if (status === "inProcess" || status === "in_process") return "En cours";
   if (status === "draft") return "Brouillon";
   if (status === "suspended") return "Suspendue";
   if (status === "archive") return "Archivée";

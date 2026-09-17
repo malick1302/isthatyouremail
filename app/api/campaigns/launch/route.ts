@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import { brevoConfigured, brevoSender, createAndSendCampaign } from "@/lib/brevo";
-import { isCampaignKind } from "@/lib/campaigns";
+import { isCampaignKind, parseCampaignSchedule } from "@/lib/campaigns";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
@@ -26,7 +26,13 @@ export async function POST(request: Request) {
   }
 
   const payload = (await request.json().catch(() => null)) as
-    | { kind?: string; templateId?: number; listId?: number; listIds?: unknown }
+    | {
+        kind?: string;
+        templateId?: number;
+        listId?: number;
+        listIds?: unknown;
+        scheduledAt?: unknown;
+      }
     | null;
   if (!isCampaignKind(payload?.kind)) {
     return NextResponse.json({ error: "Type de campagne invalide." }, { status: 400 });
@@ -49,11 +55,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Liste Brevo invalide." }, { status: 400 });
   }
 
+  let scheduledAt: Date | null = null;
+  try {
+    scheduledAt = parseCampaignSchedule(payload?.scheduledAt);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Date d'envoi invalide." },
+      { status: 400 },
+    );
+  }
+
   try {
     const campaign = await createAndSendCampaign({
       kind: payload.kind,
       templateId,
       listIds,
+      scheduledAt,
     });
     return NextResponse.json({ ok: true, ...campaign });
   } catch (error) {

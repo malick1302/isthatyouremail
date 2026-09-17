@@ -102,7 +102,24 @@ function FormCard({ form }: { form: CoursFormStats }) {
 
 export function CoursEnLigneFormList({ forms }: { forms: CoursFormStats[] }) {
   const [sort, setSort] = useState<CoursSortKey>("course-desc");
+  const [query, setQuery] = useState("");
   const sorted = useMemo(() => sortForms(forms, sort), [forms, sort]);
+  const visible = useMemo(() => {
+    const needle = query
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    if (!needle) return sorted;
+    return sorted.filter((form) => {
+      const haystack = [form.displayName, form.name, form.courseDateLabel ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      return haystack.includes(needle);
+    });
+  }, [query, sorted]);
 
   return (
     <section className="space-y-4">
@@ -126,12 +143,26 @@ export function CoursEnLigneFormList({ forms }: { forms: CoursFormStats[] }) {
         </div>
       </div>
 
+      {forms.length > 0 ? (
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Rechercher une session (date, partenaire, titre…)"
+          className="w-full rounded-2xl border border-[var(--line)] bg-[var(--card)] px-4 py-3 text-[15px] outline-none focus:border-[var(--brand)]"
+        />
+      ) : null}
+
       {sorted.length === 0 ? (
         <p className="rounded-2xl bg-[var(--card)] p-5 text-sm text-[var(--muted)]">
-          Aucun formulaire Fillout correspondant (nom commençant par « Cours en ligne »).
+          Aucun formulaire Fillout contenant « Cours en ligne » (hors questionnaires de feedback).
+        </p>
+      ) : visible.length === 0 ? (
+        <p className="rounded-2xl bg-[var(--card)] p-5 text-sm text-[var(--muted)]">
+          Aucune session ne correspond à « {query.trim()} ».
         </p>
       ) : (
-        sorted.map((form) => <FormCard key={form.formId} form={form} />)
+        visible.map((form) => <FormCard key={form.formId} form={form} />)
       )}
     </section>
   );

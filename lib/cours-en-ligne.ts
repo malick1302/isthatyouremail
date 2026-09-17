@@ -57,11 +57,13 @@ const FORM_COLORS = ["#2563eb", "#1d4ed8", "#3b82f6", "#1e40af", "#0284c7", "#03
 
 const CONCURRENCY = 1;
 
-function normalize(value: string): string {
-  return value
+function normalize(value: unknown): string {
+  return String(value ?? "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -74,7 +76,10 @@ function emptyDashboard(error?: string, configured = false): CoursEnLigneDashboa
 }
 
 export function isCoursEnLigneFormName(name: string): boolean {
-  return normalize(name).startsWith("cours en ligne");
+  const normalized = normalize(name);
+  if (!normalized.includes("cours en ligne")) return false;
+  if (normalized.includes("feedback") || normalized.includes("questionnaire")) return false;
+  return true;
 }
 
 type ParsedCourseDate = {
@@ -112,9 +117,18 @@ export function extractCourseDateFromName(name: string): ParsedCourseDate | null
 }
 
 export function displayCoursFormName(name: string): string {
-  const withoutPrefix = name.replace(/^cours\s+en\s+ligne\s*[-–:]?\s*/i, "").trim();
-  const withoutDate = withoutPrefix.replace(/^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s*[-–:]?\s*/i, "").trim();
-  return withoutDate || withoutPrefix || name;
+  const cleaned = name
+    .replace(/^cours\s+en\s+ligne\s*[-–:]?\s*/i, "")
+    .replace(/\s*[-–:]?\s*cours\s+en\s+ligne\s*[-–:]?\s*/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const withoutDate = cleaned
+    .replace(/^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s*[-–:]?\s*/i, "")
+    .replace(/\s*[-–:]?\s*\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\s*$/i, "")
+    .replace(/\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?=\s|$)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return withoutDate || cleaned || name;
 }
 
 async function mapPool<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
@@ -279,14 +293,14 @@ export function coursFormLabel(form: Pick<CoursFormOption, "displayName" | "cour
 }
 
 export async function listCoursFormOptions(): Promise<CoursFormOption[]> {
-  const forms = (await listForms())
+  const forms = (await listForms(true))
     .filter((form) => isCoursEnLigneFormName(form.name))
     .map(formOptionFromSummary);
   return sortByCourseDateDesc(forms);
 }
 
 export async function listCoursFormRecipients(formId: string): Promise<CoursFormRecipients> {
-  const forms = (await listForms()).filter((form) => isCoursEnLigneFormName(form.name));
+  const forms = (await listForms(true)).filter((form) => isCoursEnLigneFormName(form.name));
   const form = forms.find((item) => item.formId === formId);
   if (!form) {
     throw new Error("Formulaire cours en ligne introuvable.");

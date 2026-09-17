@@ -5,7 +5,7 @@ import type {
   CampaignTemplate,
 } from "@/lib/campaigns";
 import { getConfiguredBases } from "@/lib/bases";
-import { APP_CAMPAIGN_TAG, campaignKindLabel, campaignStamp } from "@/lib/campaigns";
+import { APP_CAMPAIGN_TAG, campaignKindLabel, campaignStamp, toBrevoScheduledAt } from "@/lib/campaigns";
 import { isSendableEmail, normalizeEmail } from "@/lib/email";
 
 const BREVO_API = "https://api.brevo.com/v3";
@@ -244,7 +244,8 @@ export async function createAndSendCampaign(options: {
   kind: CampaignKind;
   templateId: number;
   listIds: number[];
-}): Promise<{ campaignId: number; name: string }> {
+  scheduledAt?: Date | null;
+}): Promise<{ campaignId: number; name: string; scheduledAt: string | null }> {
   const sender = brevoSender();
   if (!sender) {
     throw new Error("Ajoute BREVO_SENDER_EMAIL et BREVO_SENDER_NAME (expéditeur vérifié dans Brevo).");
@@ -263,6 +264,9 @@ export async function createAndSendCampaign(options: {
     tag: APP_CAMPAIGN_TAG,
   };
   if (template.subject) payload.subject = template.subject;
+  if (options.scheduledAt) {
+    payload.scheduledAt = toBrevoScheduledAt(options.scheduledAt);
+  }
 
   const created = await brevoJson<{ id: number }>("/emailCampaigns", {
     method: "POST",
@@ -270,8 +274,14 @@ export async function createAndSendCampaign(options: {
   });
   if (!created.id) throw new Error("Impossible de créer la campagne Brevo.");
 
-  await brevoEmpty(`/emailCampaigns/${created.id}/sendNow`, { method: "POST" });
-  return { campaignId: created.id, name };
+  if (!options.scheduledAt) {
+    await brevoEmpty(`/emailCampaigns/${created.id}/sendNow`, { method: "POST" });
+  }
+  return {
+    campaignId: created.id,
+    name,
+    scheduledAt: options.scheduledAt ? options.scheduledAt.toISOString() : null,
+  };
 }
 
 type BrevoCampaignStats = {
@@ -295,6 +305,7 @@ type BrevoCampaignRow = {
   tag?: string;
   tags?: string[];
   sentDate?: string;
+  scheduledAt?: string;
   createdAt?: string;
   recipients?: { lists?: number[] };
   statistics?: { globalStats?: BrevoCampaignStats; campaignStats?: BrevoCampaignStats[] };
@@ -340,7 +351,7 @@ export function toHistoryItem(campaign: BrevoCampaignRow): CampaignHistoryItem {
     subject: campaign.subject?.trim() || "",
     kind: campaignKindFromName(name),
     status: campaign.status ?? "sent",
-    sentAt: campaign.sentDate ?? campaign.createdAt ?? null,
+    sentAt: campaign.sentDate ?? campaign.scheduledAt ?? campaign.createdAt ?? null,
     sent,
     delivered,
     uniqueOpens,

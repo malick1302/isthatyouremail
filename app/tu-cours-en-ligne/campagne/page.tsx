@@ -15,17 +15,20 @@ export default async function CoursCampaignPage({
   const initialFormId = Array.isArray(rawForm) ? rawForm[0] : (rawForm ?? null);
   const filloutReady = isFilloutConfigured();
   let forms: Awaited<ReturnType<typeof listCoursFormOptions>> = [];
+  let formsError: string | null = null;
   if (filloutReady) {
     try {
       forms = await listCoursFormOptions();
-    } catch {
-      forms = [];
+    } catch (error) {
+      formsError =
+        error instanceof Error ? error.message : "Impossible de lister les formulaires Fillout.";
     }
   }
 
   return (
     <CoursCampaignView
       forms={forms}
+      formsError={formsError}
       initialFormId={initialFormId}
       filloutReady={filloutReady}
       brevoReady={brevoConfigured()}

@@ -2,6 +2,12 @@
 
 import { CampaignHistory } from "@/components/gazette/CampaignHistory";
 import type { CampaignTemplate } from "@/lib/campaigns";
+import {
+  defaultCampaignSchedule,
+  formatParisDateInput,
+  formatParisScheduleLabel,
+  parseParisDateTime,
+} from "@/lib/campaigns";
 import { coursFormLabel, type CoursFormOption, type CoursFormRecipients } from "@/lib/cours-en-ligne";
 import { contrastText, isSendableEmail } from "@/lib/email";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -13,7 +19,7 @@ type SendState =
   | { phase: "importing" }
   | { phase: "waiting" }
   | { phase: "launching" }
-  | { phase: "done"; name: string; count: number }
+  | { phase: "done"; name: string; count: number; scheduledLabel?: string | null }
   | { phase: "error"; message: string };
 
 function formatCount(value: number): string {
@@ -35,14 +41,26 @@ async function readError(response: Response, fallback: string): Promise<string> 
   }
 }
 
+function matchesQuery(form: CoursFormOption, query: string): boolean {
+  if (!query) return true;
+  const haystack = [form.displayName, form.name, form.courseDateLabel ?? ""]
+    .join(" ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  return haystack.includes(query);
+}
+
 export function CoursCampaignView({
   forms,
+  formsError,
   initialFormId,
   filloutReady,
   brevoReady,
   senderReady,
 }: {
   forms: CoursFormOption[];
+  formsError?: string | null;
   initialFormId: string | null;
   filloutReady: boolean;
   brevoReady: boolean;
@@ -65,6 +83,11 @@ export function CoursCampaignView({
   const [confirm, setConfirm] = useState(false);
   const [send, setSend] = useState<SendState>({ phase: "idle" });
   const [historyKey, setHistoryKey] = useState(0);
+  const [query, setQuery] = useState("");
+  const initialSchedule = defaultCampaignSchedule();
+  const [sendMode, setSendMode] = useState<"now" | "later">("later");
+  const [scheduleDate, setScheduleDate] = useState(initialSchedule.date);
+  const [scheduleTime, setScheduleTime] = useState(initialSchedule.time);
   const loadGen = useRef(0);
   const recipientsRef = useRef<RecipientsByForm>({});
   const selectedRef = useRef(selected);
@@ -122,6 +145,27 @@ export function CoursCampaignView({
   const recipientsReady = summary.loaded === summary.expected && summary.expected > 0;
   const sending = send.phase === "importing" || send.phase === "waiting" || send.phase === "launching";
   const selectedTemplate = templates.find((item) => item.id === templateId) ?? null;
+  const normalizedQuery = query
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  const visibleForms = useMemo(
+    () => forms.filter((form) => matchesQuery(form, normalizedQuery)),
+    [forms, normalizedQuery],
+  );
+  const scheduledAt = useMemo(() => {
+    if (sendMode !== "later") return null;
+    try {
+      return parseParisDateTime(scheduleDate, scheduleTime);
+    } catch {
+      return null;
+    }
+  }, [sendMode, scheduleDate, scheduleTime]);
+  const scheduleValid =
+    sendMode === "now" || Boolean(scheduledAt && scheduledAt.getTime() > Date.now() + 60_000);
+  const scheduledLabel = scheduledAt ? formatParisScheduleLabel(scheduledAt) : null;
+  const minScheduleDate = formatParisDateInput();
 
   async function loadSelectedRecipients(currentSelected: Set<string>, reset = false) {
     const gen = ++loadGen.current;
@@ -198,7 +242,7 @@ export function CoursCampaignView({
   }
 
   async function launchCampaign() {
-    if (!templateId || summary.emails.length === 0) return;
+    if (!templateId || summary.emails.length === 0 || !scheduleValid) return;
     setSend({ phase: "importing" });
     try {
       const selectedForms = forms
@@ -264,9 +308,15 @@ export function CoursCampaignView({
           kind: "session",
           templateId,
           listIds: startData.listIds ?? startData.lists.map((list) => list.listId),
+          scheduledAt:
+            sendMode === "later" ? { date: scheduleDate, time: scheduleTime } : null,
         }),
       });
-      const launchData = (await launchResponse.json()) as { name?: string; error?: string };
+      const launchData = (await launchResponse.json()) as {
+        name?: string;
+        scheduledAt?: string | null;
+        error?: string;
+      };
       if (!launchResponse.ok) {
         setSend({ phase: "error", message: launchData.error ?? "Impossible d'envoyer la campagne." });
         return;
@@ -275,6 +325,7 @@ export function CoursCampaignView({
         phase: "done",
         name: launchData.name ?? "Session cours",
         count: summary.uniqueCount,
+        scheduledLabel: scheduledAt ? formatParisScheduleLabel(scheduledAt) : null,
       });
       setConfirm(false);
       setHistoryKey((current) => current + 1);
@@ -293,6 +344,10 @@ export function CoursCampaignView({
     setSend({ phase: "idle" });
     setTestOk(false);
     setTestError(null);
+    const nextSchedule = defaultCampaignSchedule();
+    setSendMode("later");
+    setScheduleDate(nextSchedule.date);
+    setScheduleTime(nextSchedule.time);
   }
 
   return (
@@ -372,28 +427,45 @@ export function CoursCampaignView({
                   soumissions.
                 </p>
               </div>
-              {forms.length > 0 ? (
+              {visibleForms.length > 0 ? (
                 <button
                   type="button"
                   className="text-sm font-medium text-[var(--brand)] hover:underline"
                   onClick={() => {
-                    const next = new Set(forms.map((form) => form.formId));
+                    const next = new Set(visibleForms.map((form) => form.formId));
                     setSelected(next);
                     if (filloutReady) void loadSelectedRecipients(next);
                   }}
                   disabled={sending || !filloutReady}
                 >
-                  Tout sélectionner
+                  {normalizedQuery ? "Sélectionner les résultats" : "Tout sélectionner"}
                 </button>
               ) : null}
             </div>
+            {formsError ? <p className="mt-3 text-sm text-red-700">{formsError}</p> : null}
+            {forms.length > 0 ? (
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Rechercher une session (date, partenaire, titre…)"
+                className="mt-4 w-full rounded-2xl border border-[var(--line)] bg-[var(--paper)] px-4 py-3 text-[15px] outline-none focus:border-[var(--brand)]"
+                disabled={sending}
+              />
+            ) : null}
             {forms.length === 0 ? (
               <p className="mt-4 text-sm text-[var(--muted)]">
-                Aucun formulaire dont le nom commence par « Cours en ligne ».
+                {formsError
+                  ? "Les sessions Fillout n&apos;ont pas pu être chargées."
+                  : "Aucun formulaire Fillout contenant « Cours en ligne » (hors questionnaires de feedback)."}
+              </p>
+            ) : visibleForms.length === 0 ? (
+              <p className="mt-4 text-sm text-[var(--muted)]">
+                Aucune session ne correspond à « {query.trim()} ».
               </p>
             ) : (
-              <ul className="mt-4 flex flex-col gap-2">
-                {forms.map((form) => {
+              <ul className="mt-4 flex max-h-[28rem] flex-col gap-2 overflow-y-auto pr-1">
+                {visibleForms.map((form) => {
                   const checked = selected.has(form.formId);
                   const row = recipients[form.formId];
                   return (
@@ -498,6 +570,91 @@ export function CoursCampaignView({
           </section>
 
           <section className="rounded-3xl border border-[var(--line)] bg-[var(--card)] p-6 shadow-[0_20px_50px_rgba(36,28,20,0.06)]">
+            <h2 className="text-lg font-semibold">Date et heure d&apos;envoi</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Heure de Paris. La campagne est créée maintenant, l&apos;envoi part à l&apos;horaire
+              choisi.
+            </p>
+            <div className="mt-4 flex flex-col gap-3">
+              <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--paper)] px-4 py-3">
+                <input
+                  type="radio"
+                  name="cours-send-mode"
+                  checked={sendMode === "now"}
+                  disabled={sending}
+                  onChange={() => {
+                    setSendMode("now");
+                    setConfirm(false);
+                  }}
+                />
+                <span>
+                  <span className="block font-medium">Envoyer maintenant</span>
+                  <span className="block text-xs text-[var(--muted)]">
+                    Dès que l&apos;import Brevo est terminé
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--paper)] px-4 py-3">
+                <input
+                  type="radio"
+                  name="cours-send-mode"
+                  checked={sendMode === "later"}
+                  disabled={sending}
+                  onChange={() => {
+                    setSendMode("later");
+                    setConfirm(false);
+                  }}
+                />
+                <span>
+                  <span className="block font-medium">Planifier l&apos;envoi</span>
+                  <span className="block text-xs text-[var(--muted)]">
+                    Choisis la date et l&apos;heure
+                  </span>
+                </span>
+              </label>
+            </div>
+            {sendMode === "later" ? (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium">Date</span>
+                  <input
+                    type="date"
+                    value={scheduleDate}
+                    min={minScheduleDate}
+                    onChange={(event) => {
+                      setScheduleDate(event.target.value);
+                      setConfirm(false);
+                    }}
+                    disabled={sending}
+                    className="w-full rounded-2xl border border-[var(--line)] bg-[var(--paper)] px-4 py-3 text-[15px] outline-none focus:border-[var(--brand)]"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium">Heure</span>
+                  <input
+                    type="time"
+                    value={scheduleTime}
+                    onChange={(event) => {
+                      setScheduleTime(event.target.value);
+                      setConfirm(false);
+                    }}
+                    disabled={sending}
+                    className="w-full rounded-2xl border border-[var(--line)] bg-[var(--paper)] px-4 py-3 text-[15px] outline-none focus:border-[var(--brand)]"
+                  />
+                </label>
+              </div>
+            ) : null}
+            {sendMode === "later" && scheduledLabel && scheduleValid ? (
+              <p className="mt-3 text-sm text-[var(--muted)]">Envoi prévu {scheduledLabel}.</p>
+            ) : null}
+            {sendMode === "later" && !scheduleValid ? (
+              <p className="mt-3 text-sm text-red-700">
+                Choisis une date et une heure dans le futur.
+              </p>
+            ) : null}
+          </section>
+
+          <section className="rounded-3xl border border-[var(--line)] bg-[var(--card)] p-6 shadow-[0_20px_50px_rgba(36,28,20,0.06)]">
             {!confirm ? (
               <button
                 type="button"
@@ -507,25 +664,38 @@ export function CoursCampaignView({
                   !templateId ||
                   summary.uniqueCount === 0 ||
                   sending ||
-                  !senderReady
+                  !senderReady ||
+                  !scheduleValid
                 }
                 className="w-full rounded-full bg-[var(--brand)] px-5 py-3 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
               >
-                Envoyer la campagne
+                {sendMode === "later" ? "Planifier la campagne" : "Envoyer la campagne"}
               </button>
             ) : (
               <div className="flex flex-col gap-3">
                 <p className="text-sm leading-6">
-                  Confirmer l&apos;envoi de{" "}
-                  <span className="font-semibold">{selectedTemplate?.name ?? "ce template"}</span>{" "}
-                  à <span className="font-semibold">{formatCount(summary.uniqueCount)}</span>{" "}
-                  inscrit{summary.uniqueCount > 1 ? "s" : ""} ?
+                  {sendMode === "later" && scheduledLabel ? (
+                    <>
+                      Confirmer la planification de{" "}
+                      <span className="font-semibold">{selectedTemplate?.name ?? "ce template"}</span>{" "}
+                      le <span className="font-semibold">{scheduledLabel}</span> pour{" "}
+                      <span className="font-semibold">{formatCount(summary.uniqueCount)}</span>{" "}
+                      inscrit{summary.uniqueCount > 1 ? "s" : ""} ?
+                    </>
+                  ) : (
+                    <>
+                      Confirmer l&apos;envoi immédiat de{" "}
+                      <span className="font-semibold">{selectedTemplate?.name ?? "ce template"}</span>{" "}
+                      à <span className="font-semibold">{formatCount(summary.uniqueCount)}</span>{" "}
+                      inscrit{summary.uniqueCount > 1 ? "s" : ""} ?
+                    </>
+                  )}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => void launchCampaign()}
-                    disabled={sending}
+                    disabled={sending || !scheduleValid}
                     className="rounded-full bg-[var(--brand)] px-5 py-3 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
                   >
                     {send.phase === "importing"
@@ -533,8 +703,12 @@ export function CoursCampaignView({
                       : send.phase === "waiting"
                         ? "Import Brevo en cours…"
                         : send.phase === "launching"
-                          ? "Envoi de la campagne…"
-                          : `Oui, envoyer à ${formatCount(summary.uniqueCount)} personnes`}
+                          ? sendMode === "later"
+                            ? "Planification de la campagne…"
+                            : "Envoi de la campagne…"
+                          : sendMode === "later"
+                            ? `Oui, planifier pour ${formatCount(summary.uniqueCount)} personnes`
+                            : `Oui, envoyer à ${formatCount(summary.uniqueCount)} personnes`}
                   </button>
                   <button
                     type="button"
@@ -553,8 +727,18 @@ export function CoursCampaignView({
             {send.phase === "done" ? (
               <div className="mt-4 rounded-2xl bg-[var(--paper)] px-4 py-3 text-sm">
                 <p>
-                  Campagne <span className="font-semibold">{send.name}</span> envoyée à{" "}
-                  {formatCount(send.count)} destinataire{send.count > 1 ? "s" : ""}.
+                  {send.scheduledLabel ? (
+                    <>
+                      Campagne <span className="font-semibold">{send.name}</span> planifiée le{" "}
+                      <span className="font-semibold">{send.scheduledLabel}</span> pour{" "}
+                      {formatCount(send.count)} destinataire{send.count > 1 ? "s" : ""}.
+                    </>
+                  ) : (
+                    <>
+                      Campagne <span className="font-semibold">{send.name}</span> envoyée à{" "}
+                      {formatCount(send.count)} destinataire{send.count > 1 ? "s" : ""}.
+                    </>
+                  )}
                 </p>
                 <button
                   type="button"

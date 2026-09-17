@@ -343,10 +343,33 @@ async function filloutFetch<T>(path: string, fresh = false): Promise<T> {
   throw new Error(lastError);
 }
 
-export async function listForms(): Promise<FilloutFormSummary[]> {
-  const data = await filloutFetch<FormSummary[] | { forms?: FormSummary[] }>("/forms");
-  if (Array.isArray(data)) return data;
-  return data.forms ?? [];
+function asFormSummary(raw: unknown): FilloutFormSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const formId = String(record.formId ?? record.id ?? "").trim();
+  const name = String(record.name ?? record.title ?? "").trim();
+  if (!formId || !name) return null;
+  return { formId, name };
+}
+
+function formsFromPayload(data: unknown): FilloutFormSummary[] {
+  const rawList = Array.isArray(data)
+    ? data
+    : data && typeof data === "object"
+      ? ((data as { forms?: unknown; items?: unknown; data?: unknown }).forms ??
+        (data as { items?: unknown }).items ??
+        (data as { data?: unknown }).data)
+      : [];
+  if (!Array.isArray(rawList)) return [];
+  return rawList.flatMap((item) => {
+    const form = asFormSummary(item);
+    return form ? [form] : [];
+  });
+}
+
+export async function listForms(fresh = false): Promise<FilloutFormSummary[]> {
+  const data = await filloutFetch<unknown>("/forms", fresh);
+  return formsFromPayload(data);
 }
 
 export async function findFilloutFormId(hint: string): Promise<string> {
