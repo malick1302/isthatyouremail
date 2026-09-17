@@ -1,0 +1,10 @@
+export default function NotFound() {
+  return (
+    <main className="px-5 py-16 text-center">
+      <h1 className="font-[family-name:var(--font-display)] text-3xl">Dossier introuvable</h1>
+      <a href="/inbox" className="mt-6 inline-block text-[var(--forest)]">
+        Retour à la boîte
+      </a>
+    </main>
+  );
+}

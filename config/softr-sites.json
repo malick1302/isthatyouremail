@@ -1,0 +1,44 @@
+[
+  {
+    "id": "ACAD",
+    "label": "ACAD",
+    "url": "https://www.academie-clic-et-moi.com",
+    "color": "#F46036"
+  },
+  {
+    "id": "APICIL",
+    "label": "APICIL",
+    "url": "https://www.academie-apicil.fr",
+    "color": "#439A86"
+  },
+  {
+    "id": "LFM",
+    "label": "LFM",
+    "url": "https://www.academie-lafrancemutualiste.fr",
+    "color": "#A7ECF1"
+  },
+  {
+    "id": "AG2R",
+    "label": "AG2R",
+    "url": "https://www.academie-num.fr",
+    "color": "#F2BAC9"
+  },
+  {
+    "id": "ALPTIS",
+    "label": "ALPTIS",
+    "url": "https://www.mon-ami-numerique-by-alptis.fr",
+    "color": "#736CED"
+  },
+  {
+    "id": "MGAS",
+    "label": "MGAS",
+    "url": "https://www.academie-mgas.fr",
+    "color": "#FFBB00"
+  },
+  {
+    "id": "CARSAT",
+    "label": "CARSAT",
+    "url": "https://www.academie-carsat-ra.fr",
+    "color": "#A44200"
+  }
+]
