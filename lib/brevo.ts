@@ -45,16 +45,27 @@ export function brevoSender(): { email: string; name: string } | null {
 }
 
 function parseBrevoError(status: number, body: string): string {
+  const text = body.trim();
+  let message = "";
   try {
-    const data = JSON.parse(body) as BrevoErrorBody;
-    if (data.message) return data.message;
+    const data = JSON.parse(text) as BrevoErrorBody;
+    message = data.message?.trim() ?? "";
   } catch {
-    // texte brut
+    message = text;
   }
-  const snippet = body.trim().slice(0, 220);
+  const haystack = `${message} ${text}`.toLowerCase();
+  if (
+    haystack.includes("unrecognised ip") ||
+    haystack.includes("unrecognized ip") ||
+    haystack.includes("authorised_ips") ||
+    haystack.includes("authorized_ips")
+  ) {
+    return "Brevo bloque l'IP Netlify (elle change à chaque requête). Désactive la liste d'IP autorisées : Brevo → Security → Authorised IPs, ou vide la liste.";
+  }
+  if (message) return message;
   if (status === 401) return "Clé API Brevo invalide.";
   if (status === 402) return "Crédits Brevo insuffisants pour envoyer la campagne.";
-  return snippet || `Brevo a répondu ${status}.`;
+  return text.slice(0, 220) || `Brevo a répondu ${status}.`;
 }
 
 async function brevoFetch(path: string, init?: RequestInit): Promise<Response> {

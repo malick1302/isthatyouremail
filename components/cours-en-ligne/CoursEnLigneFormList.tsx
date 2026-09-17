@@ -76,12 +76,14 @@ function FormCard({ form }: { form: CoursFormStats }) {
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div>
           <p className="text-xs uppercase tracking-wide text-[var(--muted)]">Inscriptions</p>
-          <p className="mt-1 text-xl font-semibold tabular-nums">{form.completions}</p>
+          <p className="mt-1 text-xl font-semibold tabular-nums">
+            {form.statsReady === false ? "…" : form.completions}
+          </p>
         </div>
         <div>
           <p className="text-xs uppercase tracking-wide text-[var(--muted)]">vs session précédente</p>
           <p className="mt-1 text-xl font-semibold tabular-nums">
-            {delta ?? "—"}
+            {form.statsReady === false ? "…" : (delta ?? "—")}
           </p>
         </div>
       </div>

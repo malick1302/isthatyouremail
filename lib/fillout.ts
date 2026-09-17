@@ -112,13 +112,49 @@ function retryDelayMs(response: Response, attempt: number): number {
   return Math.min(1000 * 2 ** attempt, 8000);
 }
 
+function cleanEnvValue(value: string | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .trim();
+}
+
+function normalizeFilloutBaseUrl(value: string): string {
+  const fallback = "https://api.fillout.com/v1/api";
+  let cleaned = cleanEnvValue(value).replace(/\s+/g, "").replace(/\/+$/, "");
+  if (!cleaned || !/^https?:\/\//i.test(cleaned)) return fallback;
+  cleaned = cleaned.replace(/\/forms$/i, "");
+
+  if (/^https:\/\/(eu-)?api\.fillout\.com$/i.test(cleaned)) {
+    return `${cleaned}/v1/api`;
+  }
+  if (/^https:\/\/(eu-)?api\.fillout\.com\/v1$/i.test(cleaned)) {
+    return `${cleaned}/api`;
+  }
+  return cleaned;
+}
+
 function getFilloutConfig() {
-  const apiKey = process.env.FILLOUT_API_KEY;
-  const baseUrl = (process.env.FILLOUT_API_URL ?? "https://api.fillout.com/v1/api").replace(
-    /\/$/,
-    "",
-  );
+  const apiKey = cleanEnvValue(process.env["FILLOUT_API_KEY"])
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  const baseUrl = normalizeFilloutBaseUrl(process.env["FILLOUT_API_URL"] ?? "");
   return { apiKey, baseUrl };
+}
+
+export function describeFilloutConfig(): {
+  configured: boolean;
+  length: number;
+  prefix: string;
+  baseUrl: string;
+} {
+  const { apiKey, baseUrl } = getFilloutConfig();
+  return {
+    configured: Boolean(apiKey),
+    length: apiKey.length,
+    prefix: apiKey.slice(0, 8),
+    baseUrl,
+  };
 }
 
 export function isFilloutConfigured(): boolean {
@@ -312,11 +348,10 @@ async function filloutFetch<T>(path: string, fresh = false): Promise<T> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     await scheduleFilloutSlot();
 
-    const response = await fetch(`${baseUrl}${path}`, {
+    const requestUrl = `${baseUrl}${path}`;
+    const response = await fetch(requestUrl, {
       headers: { Authorization: `Bearer ${apiKey}` },
-      ...(fresh
-        ? { cache: "no-store" as const }
-        : { cache: "force-cache" as const, next: { revalidate: FETCH_REVALIDATE } }),
+      cache: "no-store",
     });
 
     if (response.status === 429) {
@@ -331,7 +366,15 @@ async function filloutFetch<T>(path: string, fresh = false): Promise<T> {
 
     if (!response.ok) {
       const body = await response.text();
-      lastError = `Fillout API (${response.status}): ${body.slice(0, 200)}`;
+      const invalidKey = /api key invalid/i.test(body);
+      if (invalidKey) {
+        const info = describeFilloutConfig();
+        lastError = `Fillout refuse la clé API utilisée ici (${info.length} caractères, préfixe ${info.prefix || "vide"}). .env.local n'est pas déployé : recolle FILLOUT_API_KEY dans Netlify → Site settings → Environment variables, puis Trigger deploy.`;
+      } else if (response.status === 404) {
+        lastError = `Fillout API (404) sur ${requestUrl}. L'URL du dashboard (https://api.fillout.com) doit devenir https://api.fillout.com/v1/api.`;
+      } else {
+        lastError = `Fillout API (${response.status}): ${body.slice(0, 200)}`;
+      }
       throw new Error(lastError);
     }
 

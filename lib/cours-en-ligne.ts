@@ -19,6 +19,7 @@ export type CoursFormStats = {
   deltaVsPrevious: number | null;
   deltaPercentVsPrevious: number | null;
   previousCourseDateLabel: string | null;
+  statsReady?: boolean;
 };
 
 export type CoursEnLigneTotals = {
@@ -54,8 +55,6 @@ export type CoursFormRecipients = {
 };
 
 const FORM_COLORS = ["#2563eb", "#1d4ed8", "#3b82f6", "#1e40af", "#0284c7", "#0369a1"];
-
-const CONCURRENCY = 1;
 
 function normalize(value: unknown): string {
   return String(value ?? "")
@@ -131,90 +130,6 @@ export function displayCoursFormName(name: string): string {
   return withoutDate || cleaned || name;
 }
 
-async function mapPool<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
-  if (items.length === 0) return [];
-  const results: R[] = new Array(items.length);
-  let index = 0;
-
-  async function worker() {
-    while (index < items.length) {
-      const current = index;
-      index += 1;
-      results[current] = await mapper(items[current]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
-  return results;
-}
-
-function statsFromForm(
-  form: FilloutFormSummary,
-  total: number,
-  lastSubmittedAt: string | null,
-): CoursFormStatsBase {
-  const parsed = extractCourseDateFromName(form.name);
-  return {
-    formId: form.formId,
-    name: form.name,
-    displayName: displayCoursFormName(form.name),
-    courseDate: parsed?.iso ?? null,
-    courseDateLabel: parsed?.label ?? null,
-    completions: total,
-    lastSubmittedAt,
-  };
-}
-
-type CoursFormStatsBase = Omit<
-  CoursFormStats,
-  "deltaVsPrevious" | "deltaPercentVsPrevious" | "previousCourseDateLabel"
->;
-
-function applyComparisonDeltas(forms: CoursFormStatsBase[]): CoursFormStats[] {
-  const withDate = forms
-    .filter((form) => form.courseDate)
-    .sort((a, b) => (a.courseDate! < b.courseDate! ? -1 : a.courseDate! > b.courseDate! ? 1 : 0));
-
-  const deltaByFormId = new Map<
-    string,
-    Pick<CoursFormStats, "deltaVsPrevious" | "deltaPercentVsPrevious" | "previousCourseDateLabel">
-  >();
-
-  for (let i = 0; i < withDate.length; i += 1) {
-    const current = withDate[i];
-    const previous = i > 0 ? withDate[i - 1] : null;
-
-    if (!previous) {
-      deltaByFormId.set(current.formId, {
-        deltaVsPrevious: null,
-        deltaPercentVsPrevious: null,
-        previousCourseDateLabel: null,
-      });
-      continue;
-    }
-
-    const delta = current.completions - previous.completions;
-    const deltaPercent =
-      previous.completions > 0 ? (delta / previous.completions) * 100 : null;
-
-    deltaByFormId.set(current.formId, {
-      deltaVsPrevious: delta,
-      deltaPercentVsPrevious: deltaPercent,
-      previousCourseDateLabel: previous.courseDateLabel,
-    });
-  }
-
-  return forms.map((form) => {
-    const delta = deltaByFormId.get(form.formId);
-    return {
-      ...form,
-      deltaVsPrevious: delta?.deltaVsPrevious ?? null,
-      deltaPercentVsPrevious: delta?.deltaPercentVsPrevious ?? null,
-      previousCourseDateLabel: delta?.previousCourseDateLabel ?? null,
-    };
-  });
-}
-
 function sortByCourseDateDesc<T extends { courseDate: string | null; displayName: string }>(
   forms: T[],
 ): T[] {
@@ -229,16 +144,6 @@ function sortByCourseDateDesc<T extends { courseDate: string | null; displayName
     }
     return a.courseDate < b.courseDate ? 1 : -1;
   });
-}
-
-function totalsFromForms(forms: CoursFormStats[]): CoursEnLigneTotals {
-  const formCount = forms.length;
-  const completions = forms.reduce((sum, form) => sum + form.completions, 0);
-  return {
-    formCount,
-    completions,
-    avgCompletionsPerForm: formCount > 0 ? completions / formCount : null,
-  };
 }
 
 function colorForId(id: string): string {
@@ -341,6 +246,20 @@ export async function listCoursFormRecipients(formId: string): Promise<CoursForm
   };
 }
 
+export async function loadCoursFormOverview(formId: string): Promise<{
+  formId: string;
+  completions: number;
+  lastSubmittedAt: string | null;
+}> {
+  const forms = (await listForms()).filter((form) => isCoursEnLigneFormName(form.name));
+  const form = forms.find((item) => item.formId === formId);
+  if (!form) {
+    throw new Error("Formulaire cours en ligne introuvable.");
+  }
+  const { total, lastSubmittedAt } = await listSubmissionOverview(form.formId);
+  return { formId: form.formId, completions: total, lastSubmittedAt };
+}
+
 export async function loadCoursEnLigneDashboard(): Promise<CoursEnLigneDashboard> {
   if (!isFilloutConfigured()) {
     return emptyDashboard(
@@ -350,20 +269,25 @@ export async function loadCoursEnLigneDashboard(): Promise<CoursEnLigneDashboard
   }
 
   try {
-    const forms = (await listForms()).filter((form) => isCoursEnLigneFormName(form.name));
-
-    const stats = await mapPool(forms, CONCURRENCY, async (form) => {
-      const { total, lastSubmittedAt } = await listSubmissionOverview(form.formId);
-      return statsFromForm(form, total, lastSubmittedAt);
-    });
-
-    const withDeltas = applyComparisonDeltas(stats);
-    const sorted = sortByCourseDateDesc(withDeltas);
+    const options = await listCoursFormOptions();
+    const forms: CoursFormStats[] = options.map((form) => ({
+      formId: form.formId,
+      name: form.name,
+      displayName: form.displayName,
+      courseDate: form.courseDate,
+      courseDateLabel: form.courseDateLabel,
+      completions: 0,
+      lastSubmittedAt: null,
+      deltaVsPrevious: null,
+      deltaPercentVsPrevious: null,
+      previousCourseDateLabel: null,
+      statsReady: false,
+    }));
 
     return {
       configured: true,
-      forms: sorted,
-      totals: totalsFromForms(sorted),
+      forms,
+      totals: { formCount: forms.length, completions: 0, avgCompletionsPerForm: null },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erreur Fillout inconnue.";
