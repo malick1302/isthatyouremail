@@ -1,32 +1,15 @@
-import { auth } from "@/auth";
+import { requireAppUser } from "@/auth";
 import { brevoConfigured, createDatedBaseLists } from "@/lib/brevo";
 import { isCampaignKind } from "@/lib/campaigns";
-import { isSendableEmail, normalizeEmail } from "@/lib/email";
 import { NextResponse } from "next/server";
 
-const MAX_EMAILS = 20_000;
+export const maxDuration = 60;
 
-type BasePayload = { baseId?: string; label?: string; emails?: unknown };
-
-function uniqueEmails(values: unknown): string[] {
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  if (!Array.isArray(values)) return unique;
-  for (const value of values) {
-    if (typeof value !== "string") continue;
-    const email = normalizeEmail(value);
-    if (!isSendableEmail(email) || seen.has(email)) continue;
-    seen.add(email);
-    unique.push(email);
-  }
-  return unique;
-}
+type BasePayload = { baseId?: string; label?: string };
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session?.accessToken || session.error) {
-    return NextResponse.json({ error: "Non authentifié." }, { status: 401 });
-  }
+  const gate = await requireAppUser();
+  if (!gate.ok) return gate.response;
 
   if (!brevoConfigured()) {
     return NextResponse.json(
@@ -53,20 +36,11 @@ export async function POST(request: Request) {
     .map((base) => ({
       id: base.baseId?.trim() ?? "",
       label: base.label?.trim() ?? "",
-      emails: uniqueEmails(base.emails),
     }))
-    .filter((base) => base.id && base.label && base.emails.length > 0);
+    .filter((base) => base.id && base.label);
 
   if (bases.length === 0) {
     return NextResponse.json({ error: "Aucun destinataire éligible." }, { status: 400 });
-  }
-
-  const total = bases.reduce((sum, base) => sum + base.emails.length, 0);
-  if (total > MAX_EMAILS) {
-    return NextResponse.json(
-      { error: `Trop de destinataires (max ${MAX_EMAILS}).` },
-      { status: 400 },
-    );
   }
 
   try {
@@ -75,7 +49,6 @@ export async function POST(request: Request) {
       ok: true,
       lists,
       listIds: lists.map((list) => list.listId),
-      recipientCount: total,
       templateId,
     });
   } catch (error) {

@@ -273,6 +273,12 @@ a {
   background: var(--hub-yellow);
 }
 
+.hub-tki {
+  grid-area: ybot;
+  background: var(--hub-yellow);
+  color: var(--hub-ink);
+}
+
 .hub-cours-face {
   grid-area: cours;
   background: var(--hub-blue);
@@ -315,7 +321,8 @@ a.hub-cell:focus-visible {
 
 .hub-gazette:focus-visible,
 .hub-cours-face:focus-visible,
-.hub-contenu:focus-visible {
+.hub-contenu:focus-visible,
+.hub-tki:focus-visible {
   outline-color: var(--hub-ink);
 }
 
@@ -491,6 +498,7 @@ a.hub-shape:hover .hub-shape-frame {
       "gazette gazette"
       "track track"
       "magic modules"
+      "tki tki"
       "cours mots"
       "inbox inbox"
       "contenu contenu";
@@ -500,6 +508,10 @@ a.hub-shape:hover .hub-shape-frame {
   .hub-stripe-black,
   .hub-stripe-ybot {
     display: none;
+  }
+
+  .hub-tki {
+    min-height: 14vw;
   }
 
   .hub-cours-face {

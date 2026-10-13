@@ -5,7 +5,15 @@ import type {
   CampaignTemplate,
 } from "@/lib/campaigns";
 import { getConfiguredBases } from "@/lib/bases";
-import { APP_CAMPAIGN_TAG, campaignKindLabel, campaignStamp, toBrevoScheduledAt } from "@/lib/campaigns";
+import {
+  APP_CAMPAIGN_TAG,
+  campaignKindLabel,
+  campaignStamp,
+  canonicalizeBrevoProcessStatus,
+  isBrevoImportDone,
+  isBrevoImportFailed,
+  toBrevoScheduledAt,
+} from "@/lib/campaigns";
 import { isSendableEmail, normalizeEmail } from "@/lib/email";
 
 const BREVO_API = "https://api.brevo.com/v3";
@@ -198,11 +206,11 @@ export async function createDatedList(kind: CampaignKind): Promise<{ listId: num
 
 export async function createDatedBaseLists(
   kind: CampaignKind,
-  bases: { id: string; label: string; emails: string[] }[],
-): Promise<{ listId: number; processId: number; baseId: string }[]> {
+  bases: { id: string; label: string }[],
+): Promise<{ listId: number; baseId: string }[]> {
   const stamp = campaignStamp();
   const folderId = await resolveFolderId();
-  const created: { listId: number; processId: number; baseId: string }[] = [];
+  const created: { listId: number; baseId: string }[] = [];
 
   for (const base of bases) {
     const name = `${campaignKindLabel(kind)} ${stamp} — ${base.label}`;
@@ -211,43 +219,103 @@ export async function createDatedBaseLists(
       body: JSON.stringify({ name, folderId }),
     });
     if (!list.id) throw new Error(`Impossible de créer la liste Brevo ${base.label}.`);
-    const processId = await importEmailsToList(list.id, base.emails);
-    created.push({ listId: list.id, processId, baseId: base.id });
+    created.push({ listId: list.id, baseId: base.id });
   }
 
   return created;
 }
 
-export async function importEmailsToList(listId: number, emails: string[]): Promise<number> {
-  const fileBody = ["EMAIL", ...emails].join("\n");
-  const data = await brevoJson<{ processId: number }>("/contacts/import", {
+async function addExistingEmailsToList(listId: number, emails: string[]): Promise<void> {
+  await brevoEmpty(`/contacts/lists/${listId}/contacts/add`, {
+    method: "POST",
+    body: JSON.stringify({ emails }),
+  });
+}
+
+async function createContactInList(listId: number, email: string): Promise<void> {
+  await brevoJson("/contacts", {
     method: "POST",
     body: JSON.stringify({
-      fileBody,
+      email,
       listIds: [listId],
-      updateExistingContacts: true,
-      emptyContactsAttributes: false,
-      emailBlacklist: false,
-      disableNotification: true,
+      updateEnabled: true,
     }),
   });
-  if (!data.processId) throw new Error("Brevo n'a pas renvoyé de process d'import.");
-  return data.processId;
+}
+
+export async function addEmailsToListSync(listId: number, emails: string[]): Promise<void> {
+  async function addBatch(batch: string[]): Promise<void> {
+    if (batch.length === 0) return;
+    try {
+      await addExistingEmailsToList(listId, batch);
+    } catch {
+      if (batch.length === 1) {
+        try {
+          await createContactInList(listId, batch[0]);
+        } catch {
+          // e-mail invalide ou bloqué : on l'ignore pour ne pas bloquer l'envoi
+        }
+        return;
+      }
+      const mid = Math.ceil(batch.length / 2);
+      await addBatch(batch.slice(0, mid));
+      await addBatch(batch.slice(mid));
+    }
+  }
+
+  await addBatch(emails);
 }
 
 export async function getImportProcess(processId: number): Promise<BrevoProcess> {
+  try {
+    const data = await brevoJson<{
+      id?: number;
+      status?: unknown;
+      export_url?: string;
+      exportUrl?: string;
+      info?: { export_url?: string; exportUrl?: string; status?: unknown };
+    }>(`/processes/${processId}`);
+    const rawStatus = data.status ?? data.info?.status;
+    const normalized = canonicalizeBrevoProcessStatus(rawStatus);
+    const status: BrevoProcessStatus = isBrevoImportDone(normalized)
+      ? "completed"
+      : isBrevoImportFailed(normalized)
+        ? "failed"
+        : normalized === "queued"
+          ? "queued"
+          : "in_process";
+    return {
+      id: data.id ?? processId,
+      status,
+      exportUrl:
+        data.export_url ?? data.exportUrl ?? data.info?.export_url ?? data.info?.exportUrl,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    if (
+      message.includes("404") ||
+      message.includes("not found") ||
+      message.includes("document_not_found")
+    ) {
+      return { id: processId, status: "queued" };
+    }
+    throw error;
+  }
+}
+
+export async function getContactListStats(listId: number): Promise<{
+  uniqueSubscribers: number;
+  totalSubscribers: number;
+}> {
   const data = await brevoJson<{
-    id: number;
-    status: BrevoProcessStatus;
-    export_url?: string;
-    exportUrl?: string;
-    info?: { export_url?: string; exportUrl?: string };
-  }>(`/processes/${processId}`);
+    uniqueSubscribers?: number;
+    unique_subscribers?: number;
+    totalSubscribers?: number;
+    total_subscribers?: number;
+  }>(`/contacts/lists/${listId}`);
   return {
-    id: data.id,
-    status: data.status,
-    exportUrl:
-      data.export_url ?? data.exportUrl ?? data.info?.export_url ?? data.info?.exportUrl,
+    uniqueSubscribers: Number(data.uniqueSubscribers ?? data.unique_subscribers ?? 0) || 0,
+    totalSubscribers: Number(data.totalSubscribers ?? data.total_subscribers ?? 0) || 0,
   };
 }
 

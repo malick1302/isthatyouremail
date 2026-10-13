@@ -6,6 +6,7 @@ import {
   defaultCampaignSchedule,
   formatParisDateInput,
   formatParisScheduleLabel,
+  importRecipientsThenWait,
   parseParisDateTime,
 } from "@/lib/campaigns";
 import { coursFormLabel, type CoursFormOption, type CoursFormRecipients } from "@/lib/cours-en-ligne";
@@ -24,12 +25,6 @@ type SendState =
 
 function formatCount(value: number): string {
   return value.toLocaleString("fr-FR");
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -258,11 +253,16 @@ export function CoursCampaignView({
         );
       const startResponse = await fetch("/api/campaigns/start", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "session", templateId, bases: selectedForms }),
+        body: JSON.stringify({
+          kind: "session",
+          templateId,
+          bases: selectedForms.map((form) => ({ baseId: form.baseId, label: form.label })),
+        }),
       });
       const startData = (await startResponse.json()) as {
-        lists?: { listId: number; processId: number }[];
+        lists?: { listId: number; baseId?: string }[];
         listIds?: number[];
         error?: string;
       };
@@ -272,37 +272,22 @@ export function CoursCampaignView({
       }
 
       setSend({ phase: "waiting" });
-      const pending = new Set(startData.lists.map((list) => list.processId));
-      for (let attempt = 0; attempt < 90 && pending.size > 0; attempt += 1) {
-        for (const processId of [...pending]) {
-          const statusResponse = await fetch(
-            `/api/campaigns/import-status?processId=${processId}`,
-          );
-          const statusData = (await statusResponse.json()) as { status?: string; error?: string };
-          if (!statusResponse.ok) {
-            setSend({
-              phase: "error",
-              message: statusData.error ?? "Impossible de suivre l'import Brevo.",
-            });
-            return;
-          }
-          if (statusData.status === "completed") pending.delete(processId);
-          if (statusData.status === "failed" || statusData.status === "cancelled") {
-            setSend({ phase: "error", message: "L'import des contacts Brevo a échoué." });
-            return;
-          }
-        }
-        if (pending.size === 0) break;
-        if (attempt === 89) {
-          setSend({ phase: "error", message: "L'import Brevo prend trop de temps." });
-          return;
-        }
-        await wait(2000);
+      const emailsByForm = new Map(selectedForms.map((form) => [form.baseId, form.emails]));
+      const importReady = await importRecipientsThenWait(
+        startData.lists.map((list, index) => ({
+          listId: list.listId,
+          emails: emailsByForm.get(list.baseId ?? selectedForms[index]?.baseId ?? "") ?? [],
+        })),
+      );
+      if (!importReady.ok) {
+        setSend({ phase: "error", message: importReady.message });
+        return;
       }
 
       setSend({ phase: "launching" });
       const launchResponse = await fetch("/api/campaigns/launch", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind: "session",
@@ -699,9 +684,9 @@ export function CoursCampaignView({
                     className="rounded-full bg-[var(--brand)] px-5 py-3 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
                   >
                     {send.phase === "importing"
-                      ? "Import des contacts…"
+                      ? "Création des listes…"
                       : send.phase === "waiting"
-                        ? "Import Brevo en cours…"
+                        ? "Ajout des destinataires…"
                         : send.phase === "launching"
                           ? sendMode === "later"
                             ? "Planification de la campagne…"

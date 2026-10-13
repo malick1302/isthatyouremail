@@ -1,12 +1,10 @@
-import { auth } from "@/auth";
-import { brevoConfigured, getImportProcess } from "@/lib/brevo";
+import { requireAppUser } from "@/auth";
+import { brevoConfigured, getContactListStats, getImportProcess } from "@/lib/brevo";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session?.accessToken || session.error) {
-    return NextResponse.json({ error: "Non authentifié." }, { status: 401 });
-  }
+  const gate = await requireAppUser();
+  if (!gate.ok) return gate.response;
 
   if (!brevoConfigured()) {
     return NextResponse.json(
@@ -17,13 +15,34 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const processId = Number(url.searchParams.get("processId"));
-  if (!Number.isInteger(processId) || processId <= 0) {
-    return NextResponse.json({ error: "Process d'import invalide." }, { status: 400 });
+  const listId = Number(url.searchParams.get("listId"));
+  const hasProcess = Number.isInteger(processId) && processId > 0;
+  const hasList = Number.isInteger(listId) && listId > 0;
+  if (!hasProcess && !hasList) {
+    return NextResponse.json({ error: "Process ou liste Brevo invalide." }, { status: 400 });
   }
 
   try {
-    const process = await getImportProcess(processId);
-    return NextResponse.json(process);
+    const process = hasProcess
+      ? await getImportProcess(processId)
+      : { id: 0, status: "queued" as const };
+    let uniqueSubscribers = 0;
+    let totalSubscribers = 0;
+    if (hasList) {
+      try {
+        const list = await getContactListStats(listId);
+        uniqueSubscribers = list.uniqueSubscribers;
+        totalSubscribers = list.totalSubscribers;
+      } catch {
+        uniqueSubscribers = 0;
+        totalSubscribers = 0;
+      }
+    }
+    return NextResponse.json({
+      ...process,
+      uniqueSubscribers,
+      totalSubscribers,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Impossible de lire le statut d'import Brevo.";

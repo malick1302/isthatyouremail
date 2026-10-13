@@ -155,13 +155,20 @@ export function describeFilloutConfig(): {
   configured: boolean;
   length: number;
   prefix: string;
+  rawLength: number;
+  rawStart: string;
+  looksValid: boolean;
   baseUrl: string;
 } {
+  const raw = String(process.env["FILLOUT_API_KEY"] ?? "");
   const { apiKey, baseUrl } = getFilloutConfig();
   return {
     configured: Boolean(apiKey),
     length: apiKey.length,
     prefix: apiKey.slice(0, 8),
+    rawLength: raw.length,
+    rawStart: JSON.stringify(raw.slice(0, 10)),
+    looksValid: /^sk_(?:prod|test)_[A-Za-z0-9_]+$/.test(apiKey),
     baseUrl,
   };
 }

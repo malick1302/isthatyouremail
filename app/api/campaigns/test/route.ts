@@ -1,13 +1,11 @@
-import { auth } from "@/auth";
+import { requireAppUser } from "@/auth";
 import { brevoConfigured, sendTemplateTest } from "@/lib/brevo";
 import { isSendableEmail, normalizeEmail } from "@/lib/email";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session?.accessToken || session.error) {
-    return NextResponse.json({ error: "Non authentifié." }, { status: 401 });
-  }
+  const gate = await requireAppUser();
+  if (!gate.ok) return gate.response;
 
   if (!brevoConfigured()) {
     return NextResponse.json(

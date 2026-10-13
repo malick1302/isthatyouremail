@@ -2,7 +2,7 @@
 
 import { CampaignHistory } from "@/components/gazette/CampaignHistory";
 import type { CampaignBaseOption, CampaignKind, CampaignRecipients, CampaignTemplate } from "@/lib/campaigns";
-import { campaignKindLabel } from "@/lib/campaigns";
+import { campaignKindLabel, importRecipientsThenWait } from "@/lib/campaigns";
 import { contrastText, isSendableEmail } from "@/lib/email";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -18,12 +18,6 @@ type SendState =
 
 function formatCount(value: number): string {
   return value.toLocaleString("fr-FR");
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 }
 
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -232,11 +226,16 @@ export function CampaignView({
         );
       const startResponse = await fetch("/api/campaigns/start", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, templateId, bases: selectedBases }),
+        body: JSON.stringify({
+          kind,
+          templateId,
+          bases: selectedBases.map((base) => ({ baseId: base.baseId, label: base.label })),
+        }),
       });
       const startData = (await startResponse.json()) as {
-        lists?: { listId: number; processId: number }[];
+        lists?: { listId: number; baseId?: string }[];
         listIds?: number[];
         error?: string;
       };
@@ -246,37 +245,22 @@ export function CampaignView({
       }
 
       setSend({ phase: "waiting" });
-      const pending = new Set(startData.lists.map((list) => list.processId));
-      for (let attempt = 0; attempt < 90 && pending.size > 0; attempt += 1) {
-        for (const processId of [...pending]) {
-          const statusResponse = await fetch(
-            `/api/campaigns/import-status?processId=${processId}`,
-          );
-          const statusData = (await statusResponse.json()) as { status?: string; error?: string };
-          if (!statusResponse.ok) {
-            setSend({
-              phase: "error",
-              message: statusData.error ?? "Impossible de suivre l'import Brevo.",
-            });
-            return;
-          }
-          if (statusData.status === "completed") pending.delete(processId);
-          if (statusData.status === "failed" || statusData.status === "cancelled") {
-            setSend({ phase: "error", message: "L'import des contacts Brevo a échoué." });
-            return;
-          }
-        }
-        if (pending.size === 0) break;
-        if (attempt === 89) {
-          setSend({ phase: "error", message: "L'import Brevo prend trop de temps." });
-          return;
-        }
-        await wait(2000);
+      const emailsByBase = new Map(selectedBases.map((base) => [base.baseId, base.emails]));
+      const importReady = await importRecipientsThenWait(
+        startData.lists.map((list, index) => ({
+          listId: list.listId,
+          emails: emailsByBase.get(list.baseId ?? selectedBases[index]?.baseId ?? "") ?? [],
+        })),
+      );
+      if (!importReady.ok) {
+        setSend({ phase: "error", message: importReady.message });
+        return;
       }
 
       setSend({ phase: "launching" });
       const launchResponse = await fetch("/api/campaigns/launch", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           kind,
@@ -546,9 +530,9 @@ export function CampaignView({
                       className="rounded-full bg-[var(--brand)] px-5 py-3 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
                     >
                       {send.phase === "importing"
-                        ? "Import des contacts…"
+                        ? "Création des listes…"
                         : send.phase === "waiting"
-                          ? "Import Brevo en cours…"
+                          ? "Ajout des destinataires…"
                           : send.phase === "launching"
                             ? "Envoi de la campagne…"
                             : `Oui, envoyer à ${formatCount(summary.uniqueCount)} personnes`}

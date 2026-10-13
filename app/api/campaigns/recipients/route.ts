@@ -1,13 +1,11 @@
-import { auth } from "@/auth";
+import { requireAppUser } from "@/auth";
 import { listCampaignRecipients } from "@/lib/airtable";
 import { isCampaignKind } from "@/lib/campaigns";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session?.accessToken || session.error) {
-    return NextResponse.json({ error: "Non authentifié." }, { status: 401 });
-  }
+  const gate = await requireAppUser();
+  if (!gate.ok) return gate.response;
 
   const payload = (await request.json().catch(() => null)) as
     | { kind?: string; baseId?: string }

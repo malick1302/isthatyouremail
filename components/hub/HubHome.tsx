@@ -130,7 +130,13 @@ function HubMosaic({ interactive }: { interactive: boolean }) {
         />
       </HubCell>
 
-      <div className="hub-cell hub-stripe-ybot" />
+      <HubCell
+        href={href("/t-ki")}
+        className="hub-cell hub-tki"
+        description="Retrouve dans quelles bases Airtable une adresse e-mail est inscrite."
+      >
+        <span className="hub-tile-label">T KI ?</span>
+      </HubCell>
 
       <HubCell
         href={href("/tu-cours-en-ligne")}
@@ -193,8 +199,8 @@ export function HubSignIn({
           <div className="hub-signin">
             <p className="hub-signin-kicker">Clic et Moi</p>
             <p className="hub-signin-copy">
-              Connecte-toi pour ouvrir tes apps : gazette, trackmyusers, magic link, cours en ligne,
-              isthatyouremail, modules, mots croisés et contenu ACAD.
+              Connecte-toi pour ouvrir tes apps : gazette, trackmyusers, magic link, T KI ?, cours
+              en ligne, isthatyouremail, modules, mots croisés et contenu ACAD.
             </p>
             {forbidden ? (
               <p className="hub-signin-alert">

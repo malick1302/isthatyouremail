@@ -1,7 +1,9 @@
 import { allowedDomains, isAllowedEmail, isVerifiedGoogleEmail } from "@/lib/authz";
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import type { Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
+import { NextResponse } from "next/server";
 
 const hostedDomain = allowedDomains().length === 1 ? allowedDomains()[0] : undefined;
 
@@ -25,8 +27,16 @@ function denyToken(token: JWT): JWT {
   };
 }
 
-async function refreshAccessToken(token: JWT): Promise<JWT> {
+const refreshLocks = new Map<string, Promise<JWT>>();
+
+function accessTokenStillValid(token: JWT): boolean {
+  const expiresAtMs = Number(token.expiresAt ?? 0) * 1000;
+  return Boolean(token.accessToken) && expiresAtMs > Date.now();
+}
+
+async function doRefreshAccessToken(token: JWT): Promise<JWT> {
   if (!token.refreshToken) {
+    if (accessTokenStillValid(token)) return { ...token, error: undefined };
     return { ...token, error: "RefreshAccessTokenError" };
   }
 
@@ -49,6 +59,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
   };
 
   if (!response.ok || !refreshed.access_token) {
+    if (accessTokenStillValid(token)) return { ...token, error: undefined };
     return { ...token, error: "RefreshAccessTokenError" };
   }
 
@@ -59,6 +70,17 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
     refreshToken: refreshed.refresh_token ?? token.refreshToken,
     error: undefined,
   };
+}
+
+async function refreshAccessToken(token: JWT): Promise<JWT> {
+  const key = String(token.refreshToken ?? token.sub ?? "default");
+  const existing = refreshLocks.get(key);
+  if (existing) return existing;
+  const pending = doRefreshAccessToken(token).finally(() => {
+    refreshLocks.delete(key);
+  });
+  refreshLocks.set(key, pending);
+  return pending;
 }
 
 const nextAuth = NextAuth({
@@ -96,8 +118,9 @@ const nextAuth = NextAuth({
         return {
           ...token,
           accessToken: account.access_token,
-          refreshToken: account.refresh_token,
-          expiresAt: account.expires_at,
+          refreshToken: account.refresh_token ?? token.refreshToken,
+          expiresAt:
+            Number(account.expires_at) || Math.floor(Date.now() / 1000) + 3600,
           error: undefined,
         };
       }
@@ -106,8 +129,16 @@ const nextAuth = NextAuth({
         return denyToken(token);
       }
 
-      if (token.expiresAt && Date.now() < Number(token.expiresAt) * 1000 - 30_000) {
-        return token;
+      const expiresAtMs = Number(token.expiresAt ?? 0) * 1000;
+      if (token.accessToken && expiresAtMs > Date.now() + 30_000) {
+        return { ...token, error: undefined };
+      }
+      if (token.accessToken && !token.expiresAt) {
+        return {
+          ...token,
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+          error: undefined,
+        };
       }
 
       return refreshAccessToken(token);
@@ -134,4 +165,24 @@ export async function auth() {
     return { ...session, accessToken: undefined, error: "AccessDenied" };
   }
   return session;
+}
+
+export async function requireAppUser(): Promise<
+  { ok: true; session: Session } | { ok: false; response: NextResponse }
+> {
+  const session = await auth();
+  if (
+    !session?.user?.email ||
+    session.error === "AccessDenied" ||
+    !isAllowedEmail(session.user.email)
+  ) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "Ta session a expiré. Recharge la page et reconnecte-toi." },
+        { status: 401 },
+      ),
+    };
+  }
+  return { ok: true, session };
 }
